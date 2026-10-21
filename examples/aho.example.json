@@ -1,0 +1,15 @@
+{
+  "state_dir": "~/.aho",
+  "grace_minutes": 15,
+  "realert_hours": 12,
+  "healthcheck_schedule": "*/30 * * * *",
+  "digest_schedule": "0 8 * * *",
+  "alert_on_failure": true,
+  "job_timeout_minutes": 60,
+  "timezone": null,
+  "notify": {
+    "channel": "telegram",
+    "telegram_bot_token": "",
+    "telegram_chat_id": ""
+  }
+}

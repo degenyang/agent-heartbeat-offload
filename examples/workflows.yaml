@@ -1,0 +1,15 @@
+# Simple list format: explicit `command` means "this runs with no LLM".
+workflows:
+  - name: Rotate Logs
+    schedule: "0 3 * * 0"
+    description: Weekly log rotation.
+    command: "python3 scripts/rotate_logs.py --keep 8"
+  - name: Sync Notes Folder
+    schedule: "*/30 8-22 * * *"
+    description: Mirror the notes folder to the NAS every 30 minutes during the day.
+    command: "rsync -a ~/notes/ nas:/backup/notes/"
+  - name: Quarter-end Report
+    schedule: "0 9 L * *"
+    description: Placeholder showing an unsupported cron token (L) - reported, not converted.
+    task: |
+      Compile numbers and write an analysis with recommendations.

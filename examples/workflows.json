@@ -1,0 +1,15 @@
+[
+  {
+    "name": "Daily Weather Ping",
+    "schedule": "30 6 * * *",
+    "description": "Send today's forecast in a fixed format.",
+    "command": "python3 scripts/weather.py --city Example",
+    "notify_output": true
+  },
+  {
+    "name": "Inbox Triage",
+    "schedule": "0 */4 * * 1-5",
+    "description": "Read new email, decide what is urgent, and draft replies.",
+    "task": "Analyse each new email, decide priority using judgement, draft replies for urgent ones."
+  }
+]

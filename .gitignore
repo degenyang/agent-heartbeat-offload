@@ -1,0 +1,20 @@
+# secrets / local config -- never commit
+aho.json
+*.env
+.env*
+
+# generated output and runtime state
+aho-out/
+.aho/
+heartbeats/
+*.log
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.venv/
+venv/
