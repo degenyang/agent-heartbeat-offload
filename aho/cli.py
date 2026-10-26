@@ -9,8 +9,8 @@ from pathlib import Path
 from . import __version__
 from .classify import scan as classify_scan
 from .config import load_config
-from .convert import (OSES, apply, conversion_report_md, detect_os, emit, manifest, plan_jobs,
-                      scan_report_md, write_json)
+from .convert import (OSES, apply, conversion_report_md, detect_os, emit, load_prev_manifest,
+                      manifest, plan_jobs, scan_report_md, write_json)
 from .heartbeat import (alert_signature, evaluate, format_report, now_local, read_heartbeats,
                         record_alert, should_alert, write_heartbeat)
 from .notify import make_notifier, notify
@@ -53,7 +53,10 @@ def cmd_convert(a, cfg) -> int:
     jobs, skipped = plan_jobs(wfs, verdicts, out, cfg)
     write_json(out / "scan_report.json", [v.to_dict() for v in verdicts])
     (out / "scan_report.md").write_text(scan_report_md(verdicts), encoding="utf-8")
-    write_json(out / "manifest.json", manifest(jobs, cfg))
+    man_path = out / "manifest.json"
+    # carry registered_at forward: prefer this out-dir's manifest, else the installed one
+    prev_man = load_prev_manifest(man_path, Path(cfg["state_dir"]) / "manifest.json")
+    write_json(man_path, manifest(jobs, cfg, prev_man))
     cfg_path = cfg.get("_config_path")
     results = {t: emit(jobs, out, t, cfg, a.python, cfg_path) for t in targets}
     (out / "conversion_report.md").write_text(conversion_report_md(jobs, results, skipped, targets),

@@ -99,6 +99,14 @@ def test_windows_matches_cron(expr):
         assert got == want
 
 
+def test_windows_no_timeout_execution_limit():
+    # time_limit_min <= 0 => PT0S, which disables Task Scheduler's execution-time limit.
+    assert "<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>" in S.windows_task_xml(
+        "0 9 * * *", "p", "", "d", time_limit_min=0).text
+    assert "<ExecutionTimeLimit>PT1H</ExecutionTimeLimit>" in S.windows_task_xml(
+        "0 9 * * *", "p", "", "d", time_limit_min=60).text
+
+
 def test_windows_step_uses_repetition():
     em = S.windows_task_xml("50 */2 * * *", "pythonw.exe", "", "C:\\x")
     assert "<Interval>PT2H</Interval>" in em.text

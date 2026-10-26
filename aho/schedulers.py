@@ -169,10 +169,13 @@ def _gate_fallback_groups(c: Cron) -> list[tuple[int, int, int]]:
     return [(tods[0], g, (tods[-1] - tods[0]) // g + 1)]
 
 
-def windows_task_xml(cron_expr: str, command: str, arguments: str, workdir: str,
-                     description: str = "", year: int = 2026,
-                     time_limit_min: int = 60) -> Emitted:
-    c = parse(cron_expr)
+WinPlan = tuple[list[str], list[tuple[int, int, int]], bool, list[str]]
+
+
+def _win_plan(c: Cron) -> WinPlan:
+    """Decide the trigger families, time groups and whether the schedule must be gated.
+    Single source of truth: both the XML renderer and the runner-gate flag come from here,
+    so they can never disagree about whether a schedule is gated."""
     notes: list[str] = []
     gated = False
     fams = _win_day_families(c)
@@ -189,6 +192,21 @@ def windows_task_xml(cron_expr: str, command: str, arguments: str, workdir: str,
                      "on a superset of the times + runner gate.")
     if _day_mode(c) == "or":
         notes.append("cron OR-semantics for day-of-month/day-of-week mapped to two trigger families.")
+    return fams, groups, gated, notes
+
+
+def windows_plan(cron_expr: str) -> WinPlan:
+    """Compute the Windows layout once so a caller that only needs the gated flag (to build
+    the runner arguments) does not have to render the XML first and throw it away."""
+    return _win_plan(parse(cron_expr))
+
+
+def windows_task_xml(cron_expr: str, command: str, arguments: str, workdir: str,
+                     description: str = "", year: int = 2026,
+                     time_limit_min: int = 60, plan: WinPlan | None = None) -> Emitted:
+    fams, groups, gated, notes = plan if plan is not None else windows_plan(cron_expr)
+    # PT0S disables Task Scheduler's limit -> honours a "no timeout" (<= 0) job.
+    exec_limit = "PT0S" if time_limit_min <= 0 else _iso_dur(time_limit_min)
     trig = "\n".join(_win_trigger(s, i, n, f, year) for f in fams for s, i, n in groups)
     xml = f"""<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.3" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
@@ -207,7 +225,7 @@ def windows_task_xml(cron_expr: str, command: str, arguments: str, workdir: str,
     <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
     <StartWhenAvailable>true</StartWhenAvailable>
     <Hidden>true</Hidden>
-    <ExecutionTimeLimit>{_iso_dur(time_limit_min)}</ExecutionTimeLimit>
+    <ExecutionTimeLimit>{exec_limit}</ExecutionTimeLimit>
   </Settings>
   <Triggers>
 {trig}
@@ -344,8 +362,9 @@ def _plist_value(v) -> str:
 
 
 def launchd_plist(label: str, cron_expr: str, program_args: list[str], workdir: str,
-                  log_path: str) -> Emitted:
-    dicts, info = launchd_intervals(cron_expr)
+                  log_path: str,
+                  precomputed: tuple[list[dict] | None, Emitted] | None = None) -> Emitted:
+    dicts, info = precomputed if precomputed is not None else launchd_intervals(cron_expr)
     gated = info.gated
     body = {
         "Label": label,

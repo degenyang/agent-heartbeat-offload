@@ -55,6 +55,24 @@ def test_weekly_job_not_stale_midweek():
     assert s.status == "MISSED"
 
 
+def test_no_timeout_never_hung():
+    # timeout_minutes <= 0 means "no timeout": a long-running job is RUNNING, never HUNG.
+    j = dict(JOB, timeout_minutes=0)
+    s = evaluate_job(j, hb(dt.datetime(2026, 3, 10, 0, 0), code=None, status="running"), NOW)
+    assert s.status == "RUNNING"
+
+
+def test_string_timeout_in_manifest_does_not_crash():
+    # A hand-edited manifest may carry timeout_minutes as a JSON string; evaluate_job must
+    # coerce it rather than crash on the `tmo_min > 0` comparison.
+    j = dict(JOB, timeout_minutes="30")
+    h = evaluate_job(j, hb(dt.datetime(2026, 3, 10, 10, 0), code=None, status="running"), NOW)
+    assert h.status == "HUNG"
+    j2 = dict(JOB, timeout_minutes="nonsense")      # unparseable -> default 60 min
+    r = evaluate_job(j2, hb(dt.datetime(2026, 3, 10, 12, 50), code=None, status="running"), NOW)
+    assert r.status == "RUNNING"
+
+
 def test_timezone_aware_timestamps():
     aware = dt.datetime(2026, 3, 10, 12, 50).astimezone()
     s = evaluate_job(JOB, {"started_at": aware.isoformat(), "exit_code": 0, "status": "ok"}, NOW)
@@ -85,3 +103,14 @@ def test_alert_dedupe(tmp_path):
     assert not should_alert(tmp_path, sig, NOW + dt.timedelta(hours=1), 12)
     assert should_alert(tmp_path, sig, NOW + dt.timedelta(hours=13), 12)
     assert alert_signature(evaluate(man, {"j": hb(dt.datetime(2026, 3, 10, 12, 50))}, NOW)) == ""
+
+
+def test_alert_signature_ignores_run_time():
+    # A job that keeps failing writes a new started_at each cycle. The signature must stay
+    # the same for the same set of problems, or realert_hours throttling is defeated.
+    man = {"jobs": [JOB]}
+    s1 = evaluate(man, {"j": hb(dt.datetime(2026, 3, 10, 12, 50), code=2)}, dt.datetime(2026, 3, 10, 13, 5))
+    s2 = evaluate(man, {"j": hb(dt.datetime(2026, 3, 10, 14, 50), code=2)}, dt.datetime(2026, 3, 10, 15, 5))
+    assert s1[0].status == s2[0].status == "FAILED"
+    assert s1[0].last_run != s2[0].last_run                      # the run times really differ
+    assert alert_signature(s1) == alert_signature(s2) != ""      # ... but the signature does not

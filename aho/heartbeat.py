@@ -25,6 +25,7 @@ import socket
 from dataclasses import dataclass
 from pathlib import Path
 
+from .config import as_number
 from .cronexpr import parse
 
 BAD = ("NEVER", "MISSED", "FAILED", "HUNG")
@@ -99,7 +100,8 @@ def evaluate_job(job: dict, hb: dict | None, now: dt.datetime, grace_min: int = 
     cron = parse(job["schedule"])
     expected = cron.prev_fire(now_n - dt.timedelta(minutes=grace_min))
     registered = _naive_local(job["registered_at"]) if job.get("registered_at") else None
-    timeout = dt.timedelta(minutes=job.get("timeout_minutes", 60))
+    tmo_min = as_number(job.get("timeout_minutes"), 60)   # a manifest may be hand-edited
+    timeout = dt.timedelta(minutes=tmo_min if tmo_min > 0 else 0)
 
     if not hb:
         if expected is None or (registered and expected < registered):
@@ -111,7 +113,8 @@ def evaluate_job(job: dict, hb: dict | None, now: dt.datetime, grace_min: int = 
         return JobStatus(name, title, kind, "FAILED", "heartbeat unreadable")
     last = f"{started:%Y-%m-%d %H:%M}"
     if hb.get("status") == "running":
-        if now_n - started > timeout + dt.timedelta(minutes=grace_min):
+        # timeout_minutes <= 0 means "no timeout": such a job is never flagged HUNG.
+        if tmo_min > 0 and now_n - started > timeout + dt.timedelta(minutes=grace_min):
             return JobStatus(name, title, kind, "HUNG", f"running since {last} (> {timeout})", last)
         return JobStatus(name, title, kind, "RUNNING", f"started {_ago(now_n - started)}", last)
     if expected and started < expected and not (registered and expected < registered):
@@ -157,7 +160,10 @@ def format_report(statuses: list[JobStatus], mode: str = "digest", host: str | N
 
 # ---------------------------------------------------------------- alert dedupe
 def alert_signature(statuses: list[JobStatus]) -> str:
-    key = "|".join(sorted(f"{s.job}:{s.status}:{s.last_run}" for s in statuses if s.bad))
+    # Key on which jobs are bad and how -- NOT their last-run time: a job that keeps failing
+    # writes a new started_at every cycle, and folding that in would change the signature each
+    # run and defeat the realert_hours throttle (a fresh alert every health check).
+    key = "|".join(sorted(f"{s.job}:{s.status}" for s in statuses if s.bad))
     return hashlib.sha256(key.encode()).hexdigest()[:16] if key else ""
 
 

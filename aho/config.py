@@ -14,6 +14,7 @@ from pathlib import Path
 DEFAULTS: dict = {
     "state_dir": "~/.aho",              # heartbeats/, logs/, manifest.json, alert_state.json
     "grace_minutes": 15,                # how late a run may be before it counts as missed
+    "catchup_minutes": 120,             # gated job, no heartbeat yet: run a fire up to this late
     "realert_hours": 12,                # repeat an unchanged alert after this long
     "healthcheck_schedule": "*/30 * * * *",
     "digest_schedule": "0 8 * * *",
@@ -37,6 +38,20 @@ ENV_MAP = {
     "AHO_CALLMEBOT_PHONE": ("notify", "callmebot_phone"),
     "AHO_CALLMEBOT_APIKEY": ("notify", "callmebot_apikey"),
 }
+
+
+def as_number(v, default: float) -> float:
+    """Coerce a config/manifest value to a number, tolerating a JSON string like "60".
+    A bool (JSON true/false) or anything unparseable falls back to ``default`` -- these
+    values feed arithmetic (``v > 0``, ``60 * v``), which raises on a str/None/bool."""
+    if isinstance(v, bool) or v is None:
+        return default
+    if isinstance(v, (int, float)):
+        return v
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return default
 
 
 def find_config(explicit: str | None = None) -> Path | None:
@@ -69,4 +84,9 @@ def load_config(explicit: str | None = None) -> dict:
                 tgt = tgt.setdefault(k, {})
             tgt[keys[-1]] = val
     cfg["state_dir"] = str(Path(cfg["state_dir"]).expanduser())
+    # numeric fields feed arithmetic downstream; a hand-edited aho.json may carry strings.
+    cfg["grace_minutes"] = int(as_number(cfg.get("grace_minutes"), 15))
+    cfg["catchup_minutes"] = int(as_number(cfg.get("catchup_minutes"), 120))
+    cfg["realert_hours"] = as_number(cfg.get("realert_hours"), 12)
+    cfg["job_timeout_minutes"] = as_number(cfg.get("job_timeout_minutes"), 60)
     return cfg

@@ -2,6 +2,8 @@
 alert immediately on failure, optionally forward the output as the message."""
 from __future__ import annotations
 
+import datetime as dt
+import json
 import os
 import re
 import subprocess
@@ -9,11 +11,49 @@ import sys
 import time
 from pathlib import Path
 
+from .config import as_number
 from .cronexpr import parse
-from .heartbeat import now_local, write_heartbeat
+from .heartbeat import _naive_local, hb_dir, now_local, write_heartbeat
 from .notify import notify
 
 LOG_MAX = 1_000_000
+
+
+def _skip_superset_fire(state_dir: str, job: str, cron_expr, start, grace_min: int,
+                        catchup_min: int = 120) -> bool:
+    """A *gated* schedule fires on a superset of its cron times; the runner is given
+    ``--only-if-cron`` to drop the extra fires. Return True to drop THIS fire.
+
+    A fire is real when it is the first one at or after a scheduled slot: find the latest
+    slot <= now and run unless this job's last heartbeat already covers it. Matching the
+    slot (not the exact minute) keeps a legitimately late / catch-up fire -- e.g. the
+    machine was asleep at 09:00 and Task Scheduler fires at 09:07 with StartWhenAvailable --
+    which an exact ``cron.matches(now)`` check would silently discard, while the heartbeat
+    check still drops the genuine superset extras (their slot already ran).
+
+    With a usable heartbeat we can prove whether the slot already ran, so even a long
+    catch-up is honoured. WITHOUT one (first run, or the heartbeat was rotated/corrupt) we
+    cannot prove a slot was missed, so we run only when the fire is within ``catchup_min``
+    of the slot. That window is wider than ``grace_min`` on purpose: a gated schedule with
+    one sparse slot/day whose catch-up fire lands a little late must still be able to run its
+    FIRST time -- otherwise it never writes a heartbeat, so every later fire is judged with no
+    history too and the job is silenced forever. The window stays far below a day, so a true
+    superset extra (its real slot is a day or more back) is still dropped."""
+    now_n = start.replace(tzinfo=None)
+    slot = parse(cron_expr).prev_fire(now_n)
+    if slot is None:
+        return True                      # this expression never fires: always a superset extra
+    try:
+        rec = json.loads((hb_dir(state_dir) / f"{job}.json").read_text(encoding="utf-8"))
+        last = rec.get("started_at") if isinstance(rec, dict) else None   # valid JSON may not be an object
+    except (OSError, ValueError):
+        last = None
+    if last:
+        try:
+            return _naive_local(last) >= slot    # slot already ran -> drop; not yet -> run (catch-up)
+        except (ValueError, TypeError):
+            pass                         # unparseable timestamp: treat as no usable history
+    return now_n - slot > dt.timedelta(minutes=max(catchup_min, grace_min))   # no history: bootstrap window
 
 
 def _log(state_dir: str, job: str, text: str) -> None:
@@ -31,9 +71,13 @@ def run_job(cfg: dict, job: str, argv: list[str] | None = None, shell: str | Non
             notify_output: bool = False, quiet_regex: str | None = None) -> int:
     state = cfg["state_dir"]
     start = now_local()
-    if only_if_cron and not parse(only_if_cron).matches(start.replace(tzinfo=None)):
+    if only_if_cron and _skip_superset_fire(state, job, only_if_cron, start,
+                                            int(as_number(cfg.get("grace_minutes"), 15)),
+                                            int(as_number(cfg.get("catchup_minutes"), 120))):
         return 0                       # superset fire from a gated schedule: not a real slot
-    timeout_s = 60 * (timeout_min or cfg.get("job_timeout_minutes", 60))
+    raw_tmo = timeout_min if timeout_min is not None else cfg.get("job_timeout_minutes", 60)
+    tmo = as_number(raw_tmo, 60)
+    timeout_s = 60 * tmo if tmo > 0 else None   # explicit 0 / negative => no timeout
     write_heartbeat(state, job, started_at=start.isoformat(), finished_at=None,
                     exit_code=None, status="running", duration_s=0, summary="")
     kw = {}
